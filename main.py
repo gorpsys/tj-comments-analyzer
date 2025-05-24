@@ -185,9 +185,9 @@ def parse_tj_site():
             
             while True:
                 # Проверяем, достигнуто ли минимальное количество комментариев
-                if (len(all_comments['only_likes']) >= 5 and 
-                    len(all_comments['only_dislikes']) >= 5 and 
-                    len(all_comments['both']) >= 5):
+                if (len(all_comments['only_likes']) >= 2000 and 
+                    len(all_comments['only_dislikes']) >= 2000 and 
+                    len(all_comments['both']) >= 2000):
                     break
                 
                 # Генерируем новый пакет ID пользователей
