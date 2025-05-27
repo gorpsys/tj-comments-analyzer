@@ -178,6 +178,10 @@ def parse_tj_site():
                 print(f"Только дизлайки: {len(all_comments['only_dislikes'])}/2000")
                 print(f"И лайки, и дизлайки: {len(all_comments['both'])}/2000")
                 
+                # Пауза между запросами разных пользователей
+                if processed_users < len(user_ids):  # Не делаем паузу после последнего пользователя
+                    time.sleep(0.5)
+                
             except Exception as e:
                 print(f"Ошибка при обработке пользователя {user_id}: {e}")
         
