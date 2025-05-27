@@ -6,8 +6,6 @@ import json
 import time
 import random
 from datetime import datetime, timezone, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
 import pandas as pd
 
 @dataclass
@@ -31,8 +29,6 @@ def get_user_comments(session: requests.Session, account_id: int) -> Dict[str, L
         'only_dislikes': [],
         'both': []
     }
-    offset = 0
-    limit = 100
     total_comments = None
     processed_comments = 0
     
@@ -42,9 +38,7 @@ def get_user_comments(session: requests.Session, account_id: int) -> Dict[str, L
     while True:
         try:
             params = {
-                'unsafe': 'true',
-                'limit': limit,
-                'offset': offset
+                'unsafe': 'true'
             }
             
             response = session.get(base_url, params=params)
@@ -100,10 +94,9 @@ def get_user_comments(session: requests.Session, account_id: int) -> Dict[str, L
             progress = (processed_comments / total_comments) * 100 if total_comments > 0 else 0
             print(f"\rПолучено: {processed_comments}/{total_comments} ({progress:.1f}%), Учтено: {total_processed}", end='')
             
-            if len(data['data']) < limit:
+            if len(data['data']) < 100:  # Используем фиксированное значение для проверки
                 break
                 
-            offset += limit
             time.sleep(0.5)  # Пауза 500 мс между запросами
             
         except requests.RequestException as e:
@@ -115,30 +108,6 @@ def get_user_comments(session: requests.Session, account_id: int) -> Dict[str, L
     
     print()  # Новая строка после прогресс-бара
     return comments
-
-def process_user(session: requests.Session, user_id: int, progress_lock: Lock) -> Dict[str, List[Comment]]:
-    """
-    Обрабатывает одного пользователя
-    """
-    try:
-        with progress_lock:
-            print(f"\nОбработка пользователя ID: {user_id}")
-        return get_user_comments(session, user_id)
-    except Exception as e:
-        with progress_lock:
-            print(f"Ошибка при обработке пользователя {user_id}: {e}")
-        return {'only_likes': [], 'only_dislikes': [], 'both': []}
-
-def merge_comments(comments1: Dict[str, List[Comment]], comments2: Dict[str, List[Comment]]) -> Dict[str, List[Comment]]:
-    """
-    Объединяет результаты двух словарей с комментариями
-    """
-    result = {
-        'only_likes': comments1['only_likes'] + comments2['only_likes'],
-        'only_dislikes': comments1['only_dislikes'] + comments2['only_dislikes'],
-        'both': comments1['both'] + comments2['both']
-    }
-    return result
 
 def parse_tj_site():
     """
@@ -175,48 +144,42 @@ def parse_tj_site():
             'both': []
         }
         
-        # Создаем блокировку для синхронизации вывода
-        progress_lock = Lock()
+        processed_users = 0
         
-        # Создаем пул потоков
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            batch_size = 100  # Размер пакета пользователей для обработки
-            processed_users = 0
-            
-            while True:
-                # Проверяем, достигнуто ли минимальное количество комментариев
-                if (len(all_comments['only_likes']) >= 2000 and 
-                    len(all_comments['only_dislikes']) >= 2000 and 
-                    len(all_comments['both']) >= 2000):
-                    break
+        # Читаем ID пользователей из файла
+        try:
+            with open('user_ids.txt', 'r') as f:
+                user_ids = [int(line.strip()) for line in f if line.strip()]
+        except FileNotFoundError:
+            print("Файл user_ids.txt не найден")
+            return
+        except ValueError as e:
+            print(f"Ошибка при чтении ID пользователей: {e}")
+            return
+        
+        print(f"Загружено {len(user_ids)} ID пользователей")
+        
+        # Обрабатываем пользователей последовательно
+        for user_id in user_ids:
+            try:
+                print(f"\nОбработка пользователя ID: {user_id}")
+                user_comments = get_user_comments(session, user_id)
                 
-                # Генерируем новый пакет ID пользователей
-                user_ids = random.sample(range(1, 10000000), batch_size)
-                processed_users += batch_size
+                # Объединяем результаты
+                all_comments['only_likes'].extend(user_comments['only_likes'])
+                all_comments['only_dislikes'].extend(user_comments['only_dislikes'])
+                all_comments['both'].extend(user_comments['both'])
                 
-                # Запускаем обработку пользователей
-                future_to_user = {
-                    executor.submit(process_user, session, user_id, progress_lock): user_id 
-                    for user_id in user_ids
-                }
+                processed_users += 1
                 
-                # Обрабатываем результаты по мере их завершения
-                for future in as_completed(future_to_user):
-                    user_id = future_to_user[future]
-                    try:
-                        user_comments = future.result()
-                        all_comments = merge_comments(all_comments, user_comments)
-                        
-                        # Выводим статистику
-                        with progress_lock:
-                            print(f"\nОбработано пользователей: {processed_users}")
-                            print(f"Только лайки: {len(all_comments['only_likes'])}/2000")
-                            print(f"Только дизлайки: {len(all_comments['only_dislikes'])}/2000")
-                            print(f"И лайки, и дизлайки: {len(all_comments['both'])}/2000")
-                        
-                    except Exception as e:
-                        with progress_lock:
-                            print(f"Ошибка при обработке результатов пользователя {user_id}: {e}")
+                # Выводим статистику
+                print(f"\nОбработано пользователей: {processed_users}/{len(user_ids)}")
+                print(f"Только лайки: {len(all_comments['only_likes'])}/2000")
+                print(f"Только дизлайки: {len(all_comments['only_dislikes'])}/2000")
+                print(f"И лайки, и дизлайки: {len(all_comments['both'])}/2000")
+                
+            except Exception as e:
+                print(f"Ошибка при обработке пользователя {user_id}: {e}")
         
         # Выводим финальную статистику
         print("\nФинальная статистика:")
@@ -257,16 +220,16 @@ def parse_tj_site():
         
         # Создаем DataFrame и сохраняем в CSV
         df = pd.DataFrame(all_comments_list)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'comments_{timestamp}.csv'
-        df.to_csv(filename, index=False, encoding='utf-8')
-        print(f"Комментарии сохранены в файл: {filename}")
-            
+        df.to_csv('comments.csv', index=False)
+        print("Комментарии сохранены в файл comments.csv")
+        
     except requests.RequestException as e:
         print(f"Ошибка при получении куки: {e}")
+    except Exception as e:
+        print(f"Неожиданная ошибка: {e}")
 
 def main():
     parse_tj_site()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
